@@ -19,6 +19,10 @@ func (n *node) add(path string, handler http.HandlerFunc) {
 	slice := strings.Split(trimmed, "/")
 
 	for _, k := range slice {
+		if len(k) > 1 && string(k[0]) == ":" {
+			k = "*"
+		}
+
 		next, ok := current.children[k]
 		if !ok {
 			next = &node{
@@ -41,10 +45,17 @@ func (n *node) find(path string) *node {
 	slice := strings.Split(trimmed, "/")
 
 	for _, k := range slice {
+		var next *node
+
 		next, ok := current.children[k]
 		if !ok {
-			return nil
+			next, ok = current.children["*"]
+
+			if !ok {
+				return nil
+			}
 		}
+
 		current = next
 	}
 	return current
@@ -79,7 +90,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	node := r.trees[req.Method].find(req.URL.Path)
 
-	if node.path == req.URL.Path && node.handler != nil {
+	if node != nil && node.handler != nil {
 		node.handler(w, req)
 		return
 	}
