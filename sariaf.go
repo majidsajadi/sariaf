@@ -73,7 +73,8 @@ func (n *node) find(path string) (*node, paramsType) {
 }
 
 type Router struct {
-	trees map[string]*node
+	trees       map[string]*node
+	middlewares []func(http.HandlerFunc) http.HandlerFunc
 }
 
 func New() *Router {
@@ -118,12 +119,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if node != nil && node.handler != nil {
 		if len(params) != 0 {
-
 			ctx := newContext(req.Context(), params)
 			req = req.WithContext(ctx)
 		}
 
-		node.handler(w, req)
+		var handler = node.handler
+		for _, middleware := range r.middlewares {
+			handler = middleware(handler)
+		}
+
+		handler(w, req)
 		return
 	}
 
@@ -132,4 +137,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func Params(r *http.Request) (paramsType, bool) {
 	return fromContext(r.Context())
+}
+
+func (r *Router) Use(middlewares ...func(http.HandlerFunc) http.HandlerFunc) {
+	if len(middlewares) > 0 {
+		r.middlewares = append(r.middlewares, middlewares...)
+	}
 }
