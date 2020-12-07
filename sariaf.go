@@ -175,3 +175,33 @@ func (r *Router) Use(middlewares ...func(http.HandlerFunc) http.HandlerFunc) {
 		r.middlewares = append(r.middlewares, middlewares...)
 	}
 }
+
+// GET will register a path with a handler for GET requests.
+func (r *Router) GET(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodGet, path, handle)
+}
+
+// POST will register a path with a handler for POST requests.
+func (r *Router) POST(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodPost, path, handle)
+}
+
+// DELETE will register a path with a handler for DELETE requests.
+func (r *Router) DELETE(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodDelete, path, handle)
+}
+
+// PUT will register a path with a handler for PUT requests.
+func (r *Router) PUT(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodPut, path, handle)
+}
+
+// PATCH will register a path with a handler for PATCH requests.
+func (r *Router) PATCH(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodPatch, path, handle)
+}
+
+// HEAD will register a path with a handler for HEAD requests.
+func (r *Router) HEAD(path string, handle http.HandlerFunc) {
+	r.Handle(http.MethodHead, path, handle)
+}
