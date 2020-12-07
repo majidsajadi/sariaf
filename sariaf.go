@@ -107,8 +107,11 @@ func fromContext(ctx context.Context) (Params, bool) {
 // incoming request against a list of registered path with their associated
 // methods and calls the handler for the given URL.
 type Router struct {
-	trees       map[string]*node
+	trees map[string]*node
+	// middlewares stack
 	middlewares []func(http.HandlerFunc) http.HandlerFunc
+	// custom handler for handling not found
+	notFoundHandler http.HandlerFunc
 }
 
 // New returns a new Router.
@@ -148,7 +151,11 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// call the not found handler if can match the request url path to any node in trie.
-	http.NotFound(w, req)
+	if r.notFoundHandler != nil {
+		r.notFoundHandler(w, req)
+	} else {
+		http.NotFound(w, req)
+	}
 }
 
 // Handle registers a new path with the given path and method.
@@ -204,4 +211,9 @@ func (r *Router) PATCH(path string, handle http.HandlerFunc) {
 // HEAD will register a path with a handler for HEAD requests.
 func (r *Router) HEAD(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodHead, path, handle)
+}
+
+// HEAD will register a path with a handler for HEAD requests.
+func (r *Router) SetNotFoundHandler(handle http.HandlerFunc) {
+	r.notFoundHandler = handle
 }
