@@ -6,25 +6,17 @@ package sariaf
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 )
 
-var (
-	ErrGenerateParameters = errors.New("params contains wrong parameters")
-	ErrNotFoundRoute      = errors.New("cannot find route in tree")
-	ErrNotFoundMethod     = errors.New("cannot find method in tree")
-	ErrPatternGrammar     = errors.New("pattern grammar error")
-)
-
-var methods = map[string]struct{}{
-	Get:    http.MethodGet,
-	Post:   http.MethodPost,
-	Put:    http.MethodPut,
-	Delete: http.MethodDelete,
-	Patch:  http.MethodPatch,
-	Head:   http.MethodHead,
+var methods = map[string]string{
+	"GET":    http.MethodGet,
+	"POST":   http.MethodPost,
+	"PUT":    http.MethodPut,
+	"DELETE": http.MethodDelete,
+	"PATCH":  http.MethodPatch,
+	"HEAD":   http.MethodHead,
 }
 
 // each node represent a path in the router trie.
@@ -193,7 +185,7 @@ func (r *Router) Handle(method string, path string, handler http.HandlerFunc) {
 		panic("method is not valid")
 	}
 
-	if handle == nil {
+	if handler == nil {
 		panic("handle must not be nil")
 	}
 
