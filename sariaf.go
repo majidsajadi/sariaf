@@ -6,9 +6,26 @@ package sariaf
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 )
+
+var (
+	ErrGenerateParameters = errors.New("params contains wrong parameters")
+	ErrNotFoundRoute      = errors.New("cannot find route in tree")
+	ErrNotFoundMethod     = errors.New("cannot find method in tree")
+	ErrPatternGrammar     = errors.New("pattern grammar error")
+)
+
+var methods = map[string]struct{}{
+	Get:    http.MethodGet,
+	Post:   http.MethodPost,
+	Put:    http.MethodPut,
+	Delete: http.MethodDelete,
+	Patch:  http.MethodPatch,
+	Head:   http.MethodHead,
+}
 
 // each node represent a path in the router trie.
 type node struct {
@@ -83,6 +100,8 @@ func (n *node) find(path string) (*node, Params) {
 	return current, params
 }
 
+type panicHandlerType func(w http.ResponseWriter, req *http.Request, err interface{})
+
 type contextKeyType struct{}
 
 // Params is the type for request params.
@@ -108,10 +127,12 @@ func fromContext(ctx context.Context) (Params, bool) {
 // methods and calls the handler for the given URL.
 type Router struct {
 	trees map[string]*node
-	// middlewares stack
+	// middlewares stack.
 	middlewares []func(http.HandlerFunc) http.HandlerFunc
-	// custom handler for handling not found
-	notFoundHandler http.HandlerFunc
+	// notFound for when no matching route is found.
+	notFound http.HandlerFunc
+	// PanicHandler for handling panic.
+	panicHandler panicHandlerType
 }
 
 // New returns a new Router.
@@ -123,6 +144,14 @@ func New() *Router {
 
 // ServeHTTP matches r.URL.Path with a stored route and calls handler for found node.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if r.panicHandler != nil {
+		defer func() {
+			if err := recover(); err != nil {
+				r.panicHandler(w, req, err)
+			}
+		}()
+	}
+
 	// check if there is a trie for the request method.
 	if _, ok := r.trees[req.Method]; !ok {
 		http.NotFound(w, req)
@@ -132,7 +161,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// find the node with request url path in the trie.
 	node, params := r.trees[req.Method].find(req.URL.Path)
 
-	if node != nil && node.handler != nil {
+	if node != nil {
 		// attach the params context to request if any param exists.
 		if len(params) != 0 {
 			ctx := newContext(req.Context(), params)
@@ -151,8 +180,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// call the not found handler if can match the request url path to any node in trie.
-	if r.notFoundHandler != nil {
-		r.notFoundHandler(w, req)
+	if r.notFound != nil {
+		r.notFound(w, req)
 	} else {
 		http.NotFound(w, req)
 	}
@@ -160,6 +189,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // Handle registers a new path with the given path and method.
 func (r *Router) Handle(method string, path string, handler http.HandlerFunc) {
+	if _, ok := methods[method]; !ok {
+		panic("method is not valid")
+	}
+
+	if handle == nil {
+		panic("handle must not be nil")
+	}
+
 	// check if for given method there is not any tie create a new one.
 	if _, ok := r.trees[method]; !ok {
 		r.trees[method] = &node{
@@ -183,37 +220,42 @@ func (r *Router) Use(middlewares ...func(http.HandlerFunc) http.HandlerFunc) {
 	}
 }
 
-// GET will register a path with a handler for GET requests.
+// GET will register a path with a handler for get requests.
 func (r *Router) GET(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodGet, path, handle)
 }
 
-// POST will register a path with a handler for POST requests.
+// POST will register a path with a handler for post requests.
 func (r *Router) POST(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodPost, path, handle)
 }
 
-// DELETE will register a path with a handler for DELETE requests.
+// DELETE will register a path with a handler for delete requests.
 func (r *Router) DELETE(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodDelete, path, handle)
 }
 
-// PUT will register a path with a handler for PUT requests.
+// PUT will register a path with a handler for put requests.
 func (r *Router) PUT(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodPut, path, handle)
 }
 
-// PATCH will register a path with a handler for PATCH requests.
+// PATCH will register a path with a handler for patch requests.
 func (r *Router) PATCH(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodPatch, path, handle)
 }
 
-// HEAD will register a path with a handler for HEAD requests.
+// HEAD will register a path with a handler for head requests.
 func (r *Router) HEAD(path string, handle http.HandlerFunc) {
 	r.Handle(http.MethodHead, path, handle)
 }
 
-// HEAD will register a path with a handler for HEAD requests.
-func (r *Router) SetNotFoundHandler(handle http.HandlerFunc) {
-	r.notFoundHandler = handle
+// SetNotFound will register a handler for when no matching route is found
+func (r *Router) SetNotFound(handle http.HandlerFunc) {
+	r.notFound = handle
+}
+
+// SetPanicHandler will register a handler for handling panics
+func (r *Router) SetPanicHandler(handle panicHandlerType) {
+	r.panicHandler = handle
 }
