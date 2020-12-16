@@ -6,6 +6,8 @@ package sariaf
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -28,12 +30,18 @@ type node struct {
 	param    string
 }
 
+var (
+	// ErrRouterDuplicate defines the root error type for duplicate router path
+	ErrRouterDuplicate = errors.New("duplicate router path found")
+)
+
 // add method adds a new path to the trie.
-func (n *node) add(path string, handler http.HandlerFunc) {
+func (n *node) add(path string, handler http.HandlerFunc) error {
 	current := n
 
 	trimmed := strings.TrimPrefix(path, "/")
 	slice := strings.Split(trimmed, "/")
+	duplicate := true
 
 	for _, k := range slice {
 		// replace keys with pattern ":*" with "*" for matching params.
@@ -45,6 +53,7 @@ func (n *node) add(path string, handler http.HandlerFunc) {
 
 		next, ok := current.children[k]
 		if !ok {
+			duplicate = false
 			next = &node{
 				path:     path,
 				key:      k,
@@ -56,7 +65,12 @@ func (n *node) add(path string, handler http.HandlerFunc) {
 		current = next
 	}
 
+	if duplicate {
+		return fmt.Errorf("duplicate router %s: %w", path, ErrRouterDuplicate)
+	}
+
 	current.handler = handler
+	return nil
 }
 
 // find method match the request url path with a node in trie.
@@ -180,7 +194,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // Handle registers a new path with the given path and method.
-func (r *Router) Handle(method string, path string, handler http.HandlerFunc) {
+func (r *Router) Handle(method string, path string, handler http.HandlerFunc) error {
 	if _, ok := methods[method]; !ok {
 		panic("method is not valid")
 	}
@@ -197,7 +211,7 @@ func (r *Router) Handle(method string, path string, handler http.HandlerFunc) {
 		}
 	}
 
-	r.trees[method].add(path, handler)
+	return r.trees[method].add(path, handler)
 }
 
 // GetParams returns params stored in the request.
@@ -213,33 +227,33 @@ func (r *Router) Use(middlewares ...func(http.HandlerFunc) http.HandlerFunc) {
 }
 
 // GET will register a path with a handler for get requests.
-func (r *Router) GET(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodGet, path, handle)
+func (r *Router) GET(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodGet, path, handle)
 }
 
 // POST will register a path with a handler for post requests.
-func (r *Router) POST(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodPost, path, handle)
+func (r *Router) POST(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodPost, path, handle)
 }
 
 // DELETE will register a path with a handler for delete requests.
-func (r *Router) DELETE(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodDelete, path, handle)
+func (r *Router) DELETE(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodDelete, path, handle)
 }
 
 // PUT will register a path with a handler for put requests.
-func (r *Router) PUT(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodPut, path, handle)
+func (r *Router) PUT(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodPut, path, handle)
 }
 
 // PATCH will register a path with a handler for patch requests.
-func (r *Router) PATCH(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodPatch, path, handle)
+func (r *Router) PATCH(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodPatch, path, handle)
 }
 
 // HEAD will register a path with a handler for head requests.
-func (r *Router) HEAD(path string, handle http.HandlerFunc) {
-	r.Handle(http.MethodHead, path, handle)
+func (r *Router) HEAD(path string, handle http.HandlerFunc) error {
+	return r.Handle(http.MethodHead, path, handle)
 }
 
 // SetNotFound will register a handler for when no matching route is found
