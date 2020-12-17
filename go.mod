@@ -1,4 +1,4 @@
-module github.com/majidsajadi/sariaf
+module github.com/bingoohuang/sariaf
 
 go 1.14
 

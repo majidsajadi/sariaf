@@ -1,7 +1,3 @@
-// Copyright 2020 Majid Sajadi. All rights reserved.
-// Use of this source code is governed by a MIT-style license that can be found
-// in the LICENSE file.
-
 package sariaf
 
 import (
@@ -9,251 +5,355 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 )
 
-var methods = map[string]string{
-	"GET":    http.MethodGet,
-	"POST":   http.MethodPost,
-	"PUT":    http.MethodPut,
-	"DELETE": http.MethodDelete,
-	"PATCH":  http.MethodPatch,
-	"HEAD":   http.MethodHead,
-}
+// MethodAny means any http method.
+const MethodAny = "ANY"
 
-// each node represent a path in the router trie.
-type node struct {
-	path     string
-	key      string
-	children map[string]*node
-	handler  http.HandlerFunc
-	param    string
-}
+// ContextKeyType is the context key type.
+type ContextKeyType int
 
-var (
-	// ErrRouterDuplicate defines the root error type for duplicate router path
-	ErrRouterDuplicate = errors.New("duplicate router path found")
+const (
+	// ContextKey is the context key for the params.
+	ContextKey ContextKeyType = iota
 )
 
-// add method adds a new path to the trie.
-func (n *node) add(path string, handler http.HandlerFunc) error {
-	current := n
+type (
+	// PanicHandlerType is the prototype for handler of panic.
+	PanicHandlerType func(w http.ResponseWriter, req *http.Request, err interface{})
+	// RouterParams is the type for request params.
+	RouterParams map[string]string
 
+	//  RouterOption is the option type for router.
+	RouterOption struct {
+		Tag interface{}
+	}
+
+	// RouterOptionFn defines the option func type to set router option.
+	RouterOptionFn func(*RouterOption)
+
+	// Node represents a sub path in the router trie.
+	Node struct {
+		Path     string
+		Key      string
+		Children map[string]*Node
+		Handler  http.HandlerFunc
+		Param    string
+		Star     bool
+		Option   *RouterOption
+		Router   *Router
+	}
+
+	RouterContext struct {
+		Params RouterParams
+		Option *RouterOption
+	}
+)
+
+var (
+	// ErrRouterDuplicate is the root error for duplicate router path.
+	ErrRouterDuplicate = errors.New("duplicate router path found")
+	// ErrRouterSyntax is the root error for router pattern invalid syntax.
+	ErrRouterSyntax = errors.New("invalid router syntax found")
+)
+
+// Tag attaches a tag to router option.
+func Tag(tag interface{}) RouterOptionFn {
+	return func(o *RouterOption) { o.Tag = tag }
+}
+
+// add method adds a new path to the trie.
+func (n *Node) add(path string, handler http.HandlerFunc, r *Router, option *RouterOption) error {
+	current := n
 	trimmed := strings.TrimPrefix(path, "/")
 	slice := strings.Split(trimmed, "/")
 	duplicate := true
+	stars := 0
+	starPrev := false
 
 	for _, k := range slice {
-		// replace keys with pattern ":*" with "*" for matching params.
-		var param string
-		if len(k) > 1 && string(k[0]) == ":" {
-			param = strings.TrimPrefix(k, ":")
+		if len(k) > 1 && k[0] == '*' {
+			stars++
+		}
+		if stars > 1 {
+			return fmt.Errorf("router pattern invalid, only one *abc allowed: %w", ErrRouterSyntax)
+		}
+	}
+
+	for _, k := range slice {
+		// replace keys with pattern ":abc" to "abc" or "*abc" to "abc" for matching params.
+		param := ""
+		if len(k) > 1 && (k[0] == ':' || k[0] == '*') {
+			param = k[1:]
 			k = "*"
 		}
 
-		next, ok := current.children[k]
-		if !ok {
-			duplicate = false
-			next = &node{
-				path:     path,
-				key:      k,
-				children: make(map[string]*node),
-				param:    param,
+		if stars > 0 && starPrev {
+			if _, ok := current.Children[k]; ok {
+				break
 			}
-			current.children[k] = next
+			return fmt.Errorf("router pattern %s conflicts: %w", path, ErrRouterSyntax)
+		}
+
+		next, ok := current.Children[k]
+		if ok {
+			starPrev = true
+		} else {
+			duplicate = false
+			next = &Node{
+				Path:     path,
+				Key:      k,
+				Children: make(map[string]*Node),
+				Param:    param,
+				Star:     stars > 0,
+				Option:   option,
+				Router:   r,
+			}
+			current.Children[k] = next
 		}
 		current = next
 	}
 
 	if duplicate {
-		return fmt.Errorf("duplicate router %s: %w", path, ErrRouterDuplicate)
+		return fmt.Errorf("%s: %w", path, ErrRouterDuplicate)
 	}
 
-	current.handler = handler
+	current.Handler = handler
 	return nil
 }
 
-// find method match the request url path with a node in trie.
-func (n *node) find(path string) (*node, Params) {
-	params := make(Params)
-	current := n
-
+// find method match the request url path with a Node in trie.
+func (n *Node) find(path string) (*Node, RouterParams) {
+	params := make(RouterParams)
+	cur := n
 	trimmed := strings.TrimPrefix(path, "/")
 	slice := strings.Split(trimmed, "/")
 
-	for _, k := range slice {
-		var next *node
+	for i, k := range slice {
+		var next *Node
 
-		next, ok := current.children[k]
+		next, ok := cur.Children[k]
 		if !ok {
-			next, ok = current.children["*"]
-			if !ok {
-				// return nil if no node match the given path.
+			if next, ok = cur.Children["*"]; !ok {
+				// return nil if no Node match the given path.
 				return nil, params
 			}
-
 		}
 
-		current = next
+		cur = next
 
-		// if the node has a param add it to params map.
-		if current.param != "" {
-			params[current.param] = k
+		// if the Node has a param add it to params map.
+		if cur.Param != "" {
+			if cur.Star {
+				params[cur.Param] = filepath.Join(append([]string{"/"}, slice[i:]...)...)
+				return cur, params
+			}
+
+			params[cur.Param] = k
 		}
 	}
 
-	// return the found node and params map.
-	return current, params
+	// fix pattern /*abc matching
+	if next, ok := cur.Children["*"]; ok && next.Star {
+		params[next.Param] = "/"
+		cur = next
+	}
+
+	// avoid only parent matches without leaf.
+	if cur.Handler == nil {
+		cur = nil
+	}
+
+	// return the found Node and params map.
+	return cur, params
 }
 
-type panicHandlerType func(w http.ResponseWriter, req *http.Request, err interface{})
-
-type contextKeyType struct{}
-
-// Params is the type for request params.
-type Params map[string]string
-
-// contextKey is the context key for the params.
-var contextKey = contextKeyType{}
-
 // newContext returns a new Context that carries a provided params value.
-func newContext(ctx context.Context, params Params) context.Context {
-	return context.WithValue(ctx, contextKey, params)
+func newContext(ctx context.Context, routerContext *RouterContext) context.Context {
+	return context.WithValue(ctx, ContextKey, routerContext)
 }
 
 // fromContext extracts params from a Context.
-func fromContext(ctx context.Context) (Params, bool) {
-	values, ok := ctx.Value(contextKey).(Params)
-
-	return values, ok
+func fromContext(ctx context.Context) *RouterContext {
+	return ctx.Value(ContextKey).(*RouterContext)
 }
 
 // Router is an HTTP request multiplexer. It matches the URL of each
 // incoming request against a list of registered path with their associated
 // methods and calls the handler for the given URL.
 type Router struct {
-	trees map[string]*node
+	trees map[string]*Node
 	// middlewares stack.
 	middlewares []func(http.HandlerFunc) http.HandlerFunc
 	// notFound for when no matching route is found.
 	notFound http.HandlerFunc
 	// PanicHandler for handling panic.
-	panicHandler panicHandlerType
+	panicHandler PanicHandlerType
+}
+
+// NotFound replies to the request with an HTTP 404 not found error.
+func NotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = fmt.Fprint(w, "Sorry Not Found")
+}
+
+// PanicHandler replies to the request with an HTTP 500 and error message.
+func PanicHandler(w http.ResponseWriter, r *http.Request, err interface{}) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = fmt.Fprint(w, "Internal Server Error:", err)
 }
 
 // New returns a new Router.
 func New() *Router {
 	return &Router{
-		trees: make(map[string]*node),
+		trees:        make(map[string]*Node),
+		notFound:     NotFound,
+		panicHandler: PanicHandler,
 	}
 }
 
-// ServeHTTP matches r.URL.Path with a stored route and calls handler for found node.
+// Noop replies to the request with nothing.
+func Noop(http.ResponseWriter, *http.Request) {}
+
+// ServeHTTP matches r.URL.Path with a stored route and calls handler for found Node.
+func (n *Node) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			n.Router.panicHandler(w, req, err)
+		}
+	}()
+
+	// call the middlewares on handler
+	h := n.Handler
+	for _, middle := range n.Router.middlewares {
+		h = middle(h)
+	}
+
+	// call the Node handler
+	h(w, req)
+}
+
+// ServeHTTP matches r.URL.Path with a stored route and calls handler for found Node.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if r.panicHandler != nil {
-		defer func() {
-			if err := recover(); err != nil {
-				r.panicHandler(w, req, err)
-			}
-		}()
-	}
-
 	// check if there is a trie for the request method.
-	if _, ok := r.trees[req.Method]; !ok {
-		http.NotFound(w, req)
-		return
-	}
-
-	// find the node with request url path in the trie.
-	node, params := r.trees[req.Method].find(req.URL.Path)
-
-	if node != nil {
-		// attach the params context to request if any param exists.
-		if len(params) != 0 {
-			ctx := newContext(req.Context(), params)
-			req = req.WithContext(ctx)
-		}
-
-		// call the middlewares on handler
-		var handler = node.handler
-		for _, middleware := range r.middlewares {
-			handler = middleware(handler)
-		}
-
-		// call the node handler
-		handler(w, req)
-		return
-	}
-
-	// call the not found handler if can match the request url path to any node in trie.
-	if r.notFound != nil {
+	node, params := r.Search(req.Method, req.URL.Path)
+	if node == nil {
 		r.notFound(w, req)
-	} else {
-		http.NotFound(w, req)
+		return
 	}
+
+	ctx := newContext(req.Context(), &RouterContext{
+		Params: params,
+		Option: node.Option,
+	})
+
+	node.ServeHTTP(w, req.WithContext(ctx))
+}
+
+// Search searches the node for specified http method and http request url path.
+func (r *Router) Search(method, path string) (*Node, RouterParams) {
+	// check if there is a trie for the request method.
+	t, ok := r.trees[method]
+	if !ok && method != MethodAny {
+		t, ok = r.trees[MethodAny]
+	}
+
+	if !ok {
+		return nil, nil
+	}
+
+	node, params := t.find(path)
+	if node != nil || method == MethodAny {
+		return node, params
+	}
+
+	// try any
+	if t, ok = r.trees[MethodAny]; !ok {
+		return nil, nil
+	}
+
+	return t.find(path)
 }
 
 // Handle registers a new path with the given path and method.
-func (r *Router) Handle(method string, path string, handler http.HandlerFunc) error {
-	if _, ok := methods[method]; !ok {
-		panic("method is not valid")
-	}
-
+func (r *Router) Handle(method string, path string, handler http.HandlerFunc, optionFns ...RouterOptionFn) error {
 	if handler == nil {
-		panic("handle must not be nil")
+		handler = Noop
 	}
 
 	// check if for given method there is not any tie create a new one.
 	if _, ok := r.trees[method]; !ok {
-		r.trees[method] = &node{
-			path:     "/",
-			children: make(map[string]*node),
+		r.trees[method] = &Node{
+			Path:     "/",
+			Children: make(map[string]*Node),
+			Router:   r,
 		}
 	}
 
-	return r.trees[method].add(path, handler)
+	routerOption := &RouterOption{}
+	for _, f := range optionFns {
+		f(routerOption)
+	}
+
+	return r.trees[method].add(path, handler, r, routerOption)
 }
 
-// GetParams returns params stored in the request.
-func GetParams(r *http.Request) (Params, bool) {
-	return fromContext(r.Context())
+// Params returns params stored in the request.
+func Params(r *http.Request) RouterParams {
+	return fromContext(r.Context()).Params
+}
+
+// Param returns param with name stored in the request.
+func Param(r *http.Request, name string) string {
+	params := Params(r)
+
+	return params[name]
+}
+
+// Option returns router option with name stored in the request.
+func Option(r *http.Request) *RouterOption {
+	return fromContext(r.Context()).Option
 }
 
 // Use append middlewares to the middleware stack.
 func (r *Router) Use(middlewares ...func(http.HandlerFunc) http.HandlerFunc) {
-	if len(middlewares) > 0 {
-		r.middlewares = append(r.middlewares, middlewares...)
-	}
+	r.middlewares = append(r.middlewares, middlewares...)
 }
 
 // GET will register a path with a handler for get requests.
-func (r *Router) GET(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodGet, path, handle)
+func (r *Router) GET(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodGet, path, handle, optionFns...)
 }
 
 // POST will register a path with a handler for post requests.
-func (r *Router) POST(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodPost, path, handle)
+func (r *Router) POST(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodPost, path, handle, optionFns...)
 }
 
 // DELETE will register a path with a handler for delete requests.
-func (r *Router) DELETE(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodDelete, path, handle)
+func (r *Router) DELETE(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodDelete, path, handle, optionFns...)
 }
 
 // PUT will register a path with a handler for put requests.
-func (r *Router) PUT(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodPut, path, handle)
+func (r *Router) PUT(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodPut, path, handle, optionFns...)
 }
 
 // PATCH will register a path with a handler for patch requests.
-func (r *Router) PATCH(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodPatch, path, handle)
+func (r *Router) PATCH(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodPatch, path, handle, optionFns...)
 }
 
 // HEAD will register a path with a handler for head requests.
-func (r *Router) HEAD(path string, handle http.HandlerFunc) error {
-	return r.Handle(http.MethodHead, path, handle)
+func (r *Router) HEAD(path string, handle http.HandlerFunc, optionFns ...RouterOptionFn) error {
+	return r.Handle(http.MethodHead, path, handle, optionFns...)
 }
 
 // SetNotFound will register a handler for when no matching route is found
@@ -262,6 +362,6 @@ func (r *Router) SetNotFound(handle http.HandlerFunc) {
 }
 
 // SetPanicHandler will register a handler for handling panics
-func (r *Router) SetPanicHandler(handle panicHandlerType) {
+func (r *Router) SetPanicHandler(handle PanicHandlerType) {
 	r.panicHandler = handle
 }

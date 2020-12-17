@@ -4,7 +4,7 @@ Fast, simple and lightweight HTTP router for golang
 
 ## Install
 
-`go get -u github.com/majidsajadi/sariaf`
+`go get -u github.com/bingoohuang/sariaf`
 
 ## Features
 
@@ -20,38 +20,20 @@ Fast, simple and lightweight HTTP router for golang
 ## Usage
 
 ```go
-package main
-
-import (
-	"net/http"
-
-	"github.com/majidsajadi/sariaf"
-)
-
 func main() {
-    r := sariaf.New()
+	r := sariaf.New()
 
-    r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-        w.Write([]byte("welcome"))
-    })
+	r.GET("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("welcome"))
+	})
 
-    http.ListenAndServe(":3000", r)
+	http.ListenAndServe(":3000", r)
 }
 ```
 
-## Advanced Usage 
+## Advanced Usage
 
 ```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"net/http"
-
-	"github.com/majidsajadi/sariaf"
-)
-
 func main() {
 	router := sariaf.New()
 
@@ -75,8 +57,14 @@ func main() {
 	})
 
 	router.GET("/posts/:id", func(w http.ResponseWriter, r *http.Request) {
-		params, _ := sariaf.GetParams(r)
+		params, _ := sariaf.Params(r)
 		w.Write([]byte("GET: Get Post With ID:" + params["id"]))
+	})
+
+	// will match /start, /start/hello, /start/hello/world
+	router.GET("/start/*action", func(w http.ResponseWriter, r *http.Request) {
+		action := sariaf.Param(r, "action")
+		w.Write([]byte("GET: action:" + action))
 	})
 
 	router.POST("/posts", func(w http.ResponseWriter, r *http.Request) {
@@ -84,17 +72,17 @@ func main() {
 	})
 
 	router.PATCH("/posts/:id", func(w http.ResponseWriter, r *http.Request) {
-		params, _ := sariaf.GetParams(r)
+		params, _ := sariaf.Params(r)
 		w.Write([]byte("PATCH: Update Post With ID:" + params["id"]))
 	})
 
 	router.PUT("/posts/:id", func(w http.ResponseWriter, r *http.Request) {
-		params, _ := sariaf.GetParams(r)
+		params, _ := sariaf.Params(r)
 		w.Write([]byte("PUT: Update Post With ID:" + params["id"]))
 	})
 
 	router.DELETE("/posts/:id", func(w http.ResponseWriter, r *http.Request) {
-		params, _ := sariaf.GetParams(r)
+		params, _ := sariaf.Params(r)
 		w.Write([]byte("DELETE: Delete Post With ID:" + params["id"]))
 	})
 
